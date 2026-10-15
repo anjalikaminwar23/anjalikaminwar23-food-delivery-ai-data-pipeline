@@ -1,3 +1,14 @@
 # Raw data (too large for GitHub)
 data/
 .env
+
+.venv-dbt/
+
+# Logs
+logs/
+
+# dbt artifacts
+food_delivery/target/
+food_delivery/dbt_packages/
+food_delivery/logs/
+food_delivery/.user.yml
