@@ -19,3 +19,6 @@ food_delivery/.user.yml
 # Python
 __pycache__/
 *.py[cod]
+
+# Generated outputs
+review_embeddings.parquet
