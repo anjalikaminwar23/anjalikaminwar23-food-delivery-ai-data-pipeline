@@ -1,0 +1,109 @@
+# Local development environment for the food-delivery data pipeline.
+# Runs Airflow 3 with LocalExecutor, PostgreSQL metadata storage, dbt, and AI task dependencies.
+#
+# Setup:
+#   Copy .env.example to .env and configure the required environment variables.
+#   Build the Airflow image and start the services with Docker Compose.
+#   Access the Airflow UI at http://localhost:8080.
+#
+# Local development only: configure secure credentials before exposing services.
+
+x-airflow-common: &airflow-common
+  build: .
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__FERNET_KEY: ''
+
+    # Shared secret used to sign and validate Airflow API authentication tokens.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_API_AUTH_JWT_SECRET}
+
+    # Internal API endpoint used by Airflow components to communicate with the API server.
+    # Use the Compose service name so containers can resolve the endpoint over the Docker network.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://apiserver:8080/execution/'
+
+    # Credentials and settings consumed by Snowflake, dbt, and AI pipeline tasks.
+    SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+    SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+    SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD}
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
+    SAMPLE_N: ${SAMPLE_N:-5}
+
+    # Airflow connection used by tasks that interact with Snowflake.
+    AIRFLOW_CONN_SNOWFLAKE_DEFAULT: '{"conn_type":"snowflake","login":"${SNOWFLAKE_USER}","password":"${SNOWFLAKE_PASSWORD}","schema":"RAW","extra":{"account":"${SNOWFLAKE_ACCOUNT}","warehouse":"FOOD_DELIVERY_WH","database":"FOOD_DELIVERY","role":"DBT_ROLE"}}'
+
+  volumes:
+    # DAG definitions and execution logs.
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+
+    # Mount the dbt project so Airflow tasks can execute its models and tests.
+    - ../food_delivery:/opt/airflow/dbt/food_delivery
+
+    # Mount the AI scripts used by pipeline tasks.
+    - ../ai:/opt/airflow/ai
+
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  # PostgreSQL stores Airflow metadata, task states, and scheduling information.
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+  # Initialize the Airflow metadata database and create the local development user.
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - airflow db migrate && airflow users create --username "${AIRFLOW_ADMIN_USERNAME}" --password "${AIRFLOW_ADMIN_PASSWORD}" --firstname Airflow --lastname Admin --role Admin --email admin@example.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Airflow 3 API server, which also serves the web UI.
+  apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Scheduler determines when DAG runs and tasks should execute.
+  scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Parses DAG files independently of the scheduler.
+  dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+# Persistent storage for the Airflow metadata database.
+volumes:
+  pgdata:

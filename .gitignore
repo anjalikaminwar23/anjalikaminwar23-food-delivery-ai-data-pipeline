@@ -1,14 +1,21 @@
 # Raw data (too large for GitHub)
 data/
 .env
-
+*.env
+!example.env
+food_delivery/profiles.yml
 .venv-dbt/
 
 # Logs
 logs/
+airflow/logs/
 
 # dbt artifacts
 food_delivery/target/
 food_delivery/dbt_packages/
 food_delivery/logs/
 food_delivery/.user.yml
+
+# Python
+__pycache__/
+*.py[cod]
